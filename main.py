@@ -22,8 +22,16 @@ def main():
         api_key=os.getenv("OPENAI_API_KEY")
     )
     
-    response = llm.invoke("用一句繁體中文自我介紹。")
-    print(response.content)
+    while True:
+        user_input = input("You: ").strip()
+        if user_input == "q" or user_input == "bye":
+            print("bye")
+            break
+        print("Thinking...")
+        print("AI: ", end="", flush=True)
+        for chunk in llm.stream(user_input):
+            print(chunk.content, end="", flush=True)
+        print("\n")
 
 
 if __name__ == "__main__":
