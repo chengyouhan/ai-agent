@@ -39,7 +39,7 @@ def main():
         for chunk in llm.stream(context_message):
             print(chunk.content, end="", flush=True)
             reply_parts.append(chunk.content)
-        print("")
+        print()
         assistant_text = "".join(reply_parts)
         assistant_message = AIMessage(content=assistant_text)
         messages.append(human_message)
