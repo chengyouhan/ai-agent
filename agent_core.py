@@ -261,6 +261,14 @@ def _serialize_tool_calls(tc: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _has_message_payload(message: BaseMessage) -> bool:
+    if isinstance(message, AIMessage):
+        content = message.content
+        has_content = bool(content.strip()) if isinstance(content, str) else bool(content)
+        return has_content or bool(message.tool_calls)
+    return True
+
+
 def _message_to_jsonl_line(m: BaseMessage) -> str | None:
     ts = datetime.now().isoformat()
     if isinstance(m, HumanMessage):
@@ -271,6 +279,8 @@ def _message_to_jsonl_line(m: BaseMessage) -> str | None:
             if media_type:
                 row["media_type"] = media_type
     elif isinstance(m, AIMessage):
+        if not _has_message_payload(m):
+            return None
         row = {"role": "assistant", "content": m.content, "timestamp": ts}
         tc = getattr(m, "tool_calls", None)
         if tc:
@@ -336,6 +346,8 @@ def _row_to_message(obj: dict[str, Any]) -> BaseMessage | None:
         tc = obj.get("tool_calls")
         if tc:
             return AIMessage(content=content, tool_calls=_serialize_tool_calls(tc))
+        if not content.strip():
+            return None
         return AIMessage(content=content)
     if role == "tool":
         tid = obj.get("tool_call_id") or ""
@@ -605,7 +617,9 @@ def messages_for_model(messages: list[BaseMessage]) -> list[BaseMessage]:
 
     回傳新 list，不就地修改輸入（避免污染將寫入 JSONL 的 history）。
     """
-    out: list[BaseMessage] = copy.deepcopy(messages)
+    out: list[BaseMessage] = [
+        msg for msg in copy.deepcopy(messages) if _has_message_payload(msg)
+    ]
 
     # A: drop orphan ToolMessage rows
     kept: list[BaseMessage] = []
