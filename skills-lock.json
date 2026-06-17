@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "peas-llm-wiki-coach": {
+      "source": "mz038197/vanscoding-skills",
+      "sourceType": "github",
+      "skillPath": "Teacher/peas-llm-wiki-coach/SKILL.md",
+      "computedHash": "4c4accc0a7f3cc0f05ba7d94c67f1b863920f8b209e0ecd84f9e95fa64db0cb3"
+    }
+  }
+}
