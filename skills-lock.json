@@ -1,11 +1,29 @@
 {
   "version": 1,
   "skills": {
+    "peas-capstone-report": {
+      "source": "mz038197/vanscoding-skills",
+      "sourceType": "github",
+      "skillPath": "Teacher/peas-capstone-report/SKILL.md",
+      "computedHash": "6ec98244ec8292509b492623dfd864c5dc976133d9924310a33487c67bc7aed4"
+    },
     "peas-llm-wiki-coach": {
       "source": "mz038197/vanscoding-skills",
       "sourceType": "github",
       "skillPath": "Teacher/peas-llm-wiki-coach/SKILL.md",
       "computedHash": "4c4accc0a7f3cc0f05ba7d94c67f1b863920f8b209e0ecd84f9e95fa64db0cb3"
+    },
+    "pptx": {
+      "source": "mz038197/vanscoding-skills",
+      "sourceType": "github",
+      "skillPath": "Documents/pptx/SKILL.md",
+      "computedHash": "c6a8906684b704ddad43d8f1e6cfe23d96b042d526e584f36ba6c16595f1efe7"
+    },
+    "vcr-imagegen": {
+      "source": "mz038197/vanscoding-skills",
+      "sourceType": "github",
+      "skillPath": "Media/vcr-imagegen/SKILL.md",
+      "computedHash": "17aa232d4e6322c37da9fb0d3ff9587c4e817673925353af8560c02bbec0a0f9"
     }
   }
 }

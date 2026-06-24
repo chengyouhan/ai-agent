@@ -11,6 +11,7 @@ TITLE_OVERRIDES = {
     "1_Home": "Home",
     "2_Playground": "Playground",
     "3_UI_Cheatsheet": "UI 元件詞彙表",
+    "7_Wiki_Workbench": "Wiki 工作台",
 }
 
 

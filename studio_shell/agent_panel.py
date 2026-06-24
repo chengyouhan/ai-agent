@@ -24,6 +24,14 @@ SESSION_DIR = PEAS_WORKSPACE / "sessions"
 SCRIPTS_DIR = SHELL_ROOT / "scripts"
 CHAT_IMAGE_DIR = PEAS_WORKSPACE / "uploads" / "chat_images"
 TTS_CONFIG_PATH = PEAS_AGENT_HOME / "tts.json"
+LLM_CONFIG_PATH = PEAS_AGENT_HOME / "config.json"
+REASONING_EFFORT_OPTIONS = ("none", "low", "medium", "high")
+REASONING_EFFORT_LABELS = {
+    "none": "關閉 (none)",
+    "low": "快速 (low)",
+    "medium": "平衡 (medium)",
+    "high": "深度 (high)",
+}
 MIGRATION_MARKER_PATH = PEAS_AGENT_HOME / ".studio_migration_done"
 LEGACY_USER_SETTINGS_PATH = SHELL_ROOT / "workspace" / "user_settings.json"
 LEGACY_SESSION_DIR = SHELL_ROOT / "sessions"
@@ -62,6 +70,8 @@ TTS_VOICE_LABELS: dict[str, str] = {
 }
 LEGACY_HARDCODED_TTS_INSTRUCTIONS = "用台灣繁體中文說話。"
 LEGACY_HARDCODED_TTS_SPEED = 1.0
+DEFAULT_TTS_BASE_URL = "https://ai.vanscoding.com/v1"
+DEFAULT_TTS_MODEL = "openai@gpt-4o-mini-tts"
 
 
 def _tts_voice_label(voice_id: str) -> str:
@@ -84,7 +94,8 @@ def _default_tts_config() -> dict[str, object]:
     env = Settings()
     return {
         "api_key": "",
-        "base_url": "",
+        "base_url": DEFAULT_TTS_BASE_URL,
+        "model": DEFAULT_TTS_MODEL,
         "enabled": False,
         "voice": env.voice,
         "instructions": env.instructions,
@@ -130,10 +141,13 @@ def _normalize_tts_config(
     enabled = raw.get("enabled", raw.get("tts_enabled", defaults["enabled"]))
     instructions = raw.get("instructions", raw.get("tts_instructions", defaults["instructions"]))
     instructions = str(instructions).strip() or str(defaults["instructions"])
+    base_url = str(raw.get("base_url", defaults["base_url"])).strip() or str(defaults["base_url"])
+    model = str(raw.get("model", defaults["model"])).strip() or str(defaults["model"])
 
     return {
         "api_key": str(raw.get("api_key", defaults["api_key"])),
-        "base_url": str(raw.get("base_url", defaults["base_url"])),
+        "base_url": base_url,
+        "model": model,
         "enabled": bool(enabled),
         "voice": voice,
         "instructions": instructions,
@@ -203,7 +217,8 @@ def _config_from_tts_widgets() -> dict[str, object]:
     current = _load_tts_config()
     return {
         "api_key": current.get("api_key", ""),
-        "base_url": current.get("base_url", ""),
+        "base_url": current.get("base_url", DEFAULT_TTS_BASE_URL),
+        "model": current.get("model", DEFAULT_TTS_MODEL),
         "enabled": bool(st.session_state.get("studio_tts_enabled", False)),
         "voice": str(st.session_state.get("studio_tts_voice", "")),
         "instructions": str(st.session_state.get("studio_tts_instructions", "")),
@@ -275,9 +290,15 @@ def _build_tts_settings_for_playback() -> Settings | None:
     api_key = str(cfg.get("api_key", "")).strip()
     if not api_key:
         return None
+    model = str(cfg.get("model", "")).strip()
+    if not model or "@" not in model:
+        return None
+    base_url = str(cfg.get("base_url", "")).strip()
     return replace(
         Settings(),
         api_key=api_key,
+        base_url=base_url,
+        model=model,
         voice=str(st.session_state["studio_tts_voice"]),
         instructions=str(st.session_state["studio_tts_instructions"]).strip()
         or Settings().instructions,
@@ -327,6 +348,151 @@ def _render_tts_settings_ui(*, settings_error: str | None = None) -> None:
             "文字回答完成後才開始 TTS；語音錯誤不會影響文字顯示。"
         )
         persist_error = _persist_tts_preferences_if_changed()
+        if persist_error:
+            st.warning(persist_error)
+
+
+def _default_reasoning_config() -> dict[str, str]:
+    return {"effort": "medium", "summary": "auto"}
+
+
+def _read_llm_config() -> dict[str, object]:
+    if not LLM_CONFIG_PATH.is_file():
+        return {}
+    try:
+        raw = json.loads(LLM_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _normalize_reasoning_effort(value: object) -> str:
+    effort = str(value or "").strip().lower()
+    if effort in REASONING_EFFORT_OPTIONS:
+        return effort
+    return _default_reasoning_config()["effort"]
+
+
+def _load_reasoning_effort() -> str:
+    cfg = _read_llm_config()
+    llm = cfg.get("llm")
+    if not isinstance(llm, dict):
+        return _default_reasoning_config()["effort"]
+    reasoning = llm.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return _default_reasoning_config()["effort"]
+    return _normalize_reasoning_effort(reasoning.get("effort"))
+
+
+def _load_use_responses_api() -> bool:
+    cfg = _read_llm_config()
+    llm = cfg.get("llm")
+    if not isinstance(llm, dict):
+        return True
+    return llm.get("use_responses_api") is not False
+
+
+def _save_reasoning_effort(effort: str) -> str | None:
+    normalized = _normalize_reasoning_effort(effort)
+    cfg = _read_llm_config()
+    llm = cfg.get("llm")
+    if not isinstance(llm, dict):
+        llm = {}
+        cfg["llm"] = llm
+    reasoning = llm.get("reasoning")
+    if not isinstance(reasoning, dict):
+        reasoning = dict(_default_reasoning_config())
+        llm["reasoning"] = reasoning
+    reasoning["effort"] = normalized
+    try:
+        LLM_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LLM_CONFIG_PATH.write_text(
+            json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return f"無法寫入 LLM 設定檔：{exc}"
+    return None
+
+
+def _reload_reasoning_llm_config(agent: Any) -> str | None:
+    reload = getattr(agent, "reload_llm_config", None)
+    if reload is None:
+        return "請先升級 peas-agent-core（需支援 Agent.reload_llm_config）。"
+    try:
+        reload()
+    except Exception as exc:
+        return f"套用推理深度失敗：`{exc}`"
+    return None
+
+
+def _apply_reasoning_effort_change(new_effort: str) -> str | None:
+    error = _save_reasoning_effort(new_effort)
+    if error:
+        return error
+    agent = st.session_state.get("studio_agent")
+    if agent is not None:
+        return _reload_reasoning_llm_config(agent)
+    return None
+
+
+def _reload_reasoning_preferences_from_file() -> None:
+    effort = _load_reasoning_effort()
+    st.session_state["studio_reasoning_effort"] = effort
+    st.session_state["_studio_reasoning_snapshot"] = effort
+
+
+def _persist_reasoning_effort_if_changed() -> str | None:
+    if "studio_reasoning_effort" not in st.session_state:
+        return None
+    previous = st.session_state.get("_studio_reasoning_snapshot")
+    if previous is None:
+        return None
+    current = _normalize_reasoning_effort(st.session_state.get("studio_reasoning_effort"))
+    if previous == current:
+        return None
+    reload_error = _apply_reasoning_effort_change(current)
+    if reload_error:
+        return reload_error
+    st.session_state["_studio_reasoning_snapshot"] = current
+    return None
+
+
+def _sync_reasoning_preferences_for_page(page_name: str) -> str | None:
+    persist_error = _persist_reasoning_effort_if_changed()
+    if persist_error is not None:
+        return persist_error
+    _reload_reasoning_preferences_from_file()
+    st.session_state["_studio_reasoning_page_name"] = page_name
+    return None
+
+
+def _prepare_reasoning_preferences(page_name: str) -> str | None:
+    return _sync_reasoning_preferences_for_page(page_name)
+
+
+def _render_reasoning_settings_ui(*, settings_error: str | None = None) -> None:
+    if settings_error:
+        st.warning(settings_error)
+
+    responses_enabled = _load_use_responses_api()
+    with st.expander("推理深度", expanded=False):
+        st.selectbox(
+            "推理深度",
+            REASONING_EFFORT_OPTIONS,
+            format_func=lambda value: REASONING_EFFORT_LABELS.get(value, value),
+            key="studio_reasoning_effort",
+            disabled=not responses_enabled,
+            help="控制 Responses API 的 reasoning.effort；切換後立即套用。",
+        )
+        if not responses_enabled:
+            st.caption("需於 config.json 啟用 use_responses_api 才有效。")
+        else:
+            st.caption(
+                "關閉 (none) 可加速回覆；若 API 回 400 請改回 low 或確認模型是否支援 none。"
+            )
+        st.caption(f"LLM 設定檔：`{LLM_CONFIG_PATH}`")
+        persist_error = _persist_reasoning_effort_if_changed()
         if persist_error:
             st.warning(persist_error)
 
@@ -661,6 +827,61 @@ def _load_session_history(path: Path) -> list[tuple[str, str]]:
     return history
 
 
+REASONING_ROUND_SEPARATOR = "\n\n---\n\n"
+TOOL_RUN_PLACEHOLDER = "（執行工具中…）"
+
+
+def _commit_reasoning_round(segments: list[str], current_parts: list[str]) -> None:
+    text = "".join(current_parts).strip()
+    if text:
+        segments.append(text)
+    current_parts.clear()
+
+
+def _merged_reasoning_text(segments: list[str], current_parts: list[str]) -> str:
+    parts = [segment for segment in segments if segment.strip()]
+    current = "".join(current_parts).strip()
+    if current:
+        parts.append(current)
+    return REASONING_ROUND_SEPARATOR.join(parts)
+
+
+def _render_reasoning_expander(
+    reasoning_slot: Any,
+    text: str,
+    *,
+    expanded: bool,
+    stream_ui: dict[str, Any],
+) -> None:
+    if not text.strip():
+        return
+    stream_ui["visible"] = True
+    stream_ui["expanded"] = expanded
+    with reasoning_slot.container():
+        with st.expander("思考過程", expanded=expanded):
+            if expanded:
+                stream_ui["reasoning_ph"] = st.empty()
+                stream_ui["reasoning_ph"].markdown(text)
+            else:
+                stream_ui["reasoning_ph"] = None
+                st.markdown(text)
+
+
+def _parse_history_entry(entry: tuple[str, ...]) -> tuple[str, str, str]:
+    role = entry[0]
+    text = entry[1] if len(entry) > 1 else ""
+    reasoning = entry[2] if len(entry) > 2 else ""
+    return role, text, reasoning
+
+
+def _render_history_message(role: str, text: str, *, reasoning: str = "") -> None:
+    with st.chat_message(role):
+        if role == "assistant" and reasoning.strip():
+            with st.expander("思考過程", expanded=False):
+                st.markdown(reasoning)
+        st.markdown(text)
+
+
 def _set_current_session(path: Path) -> None:
     session_name = _session_name(path)
     st.session_state["session_name"] = session_name
@@ -727,6 +948,75 @@ def _get_agent_for_session(session_name: str) -> Any:
     return st.session_state["studio_agent"]
 
 
+def current_session_name() -> str | None:
+    sessions = _list_sessions()
+    return _ensure_valid_current_session(sessions)
+
+
+def can_run_agent_for_current_session() -> tuple[bool, str | None]:
+    session_name = current_session_name()
+    if not session_name:
+        return False, "尚無對話紀錄，請先在右欄新增對話。"
+
+    restored, restore_error = _restore_agent_core_if_possible(session_name)
+    connected = bool(st.session_state.get("studio_agent_core_connected")) or restored
+    if not connected:
+        return False, restore_error or "請先在右欄啟用 Agent。"
+    return True, None
+
+
+def run_agent_prompt_for_current_session(
+    prompt: str,
+    *,
+    display_user_text: str | None = None,
+    image_path: str | None = None,
+) -> tuple[str, str]:
+    ok, message = can_run_agent_for_current_session()
+    if not ok:
+        raise RuntimeError(message or "Agent 目前不可用。")
+
+    session_name = st.session_state.get("session_name")
+    if not isinstance(session_name, str) or not session_name:
+        raise RuntimeError("找不到目前對話紀錄。")
+
+    try:
+        agent = _get_agent_for_session(session_name)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Agent Core 連線失敗：{exc}") from exc
+
+    reasoning_segments: list[str] = []
+    reasoning_parts: list[str] = []
+
+    def on_reasoning(token: str) -> None:
+        reasoning_parts.append(token)
+
+    def on_stream_reset() -> None:
+        _commit_reasoning_round(reasoning_segments, reasoning_parts)
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            final_text = agent.chat(
+                prompt,
+                image_path=image_path,
+                on_reasoning=on_reasoning,
+                on_stream_reset=on_stream_reset,
+            )
+    except Exception as exc:
+        raise RuntimeError(f"Agent 執行時發生錯誤：{exc}") from exc
+
+    _commit_reasoning_round(reasoning_segments, reasoning_parts)
+    reasoning_text = _merged_reasoning_text(reasoning_segments, [])
+    answer = str(final_text or "").strip()
+    user_text = (display_user_text or _extract_display_user_text(prompt)).strip() or "（自動送出提示詞）"
+
+    history = st.session_state.setdefault("studio_chat_history", [])
+    history.append(("user", user_text, ""))
+    history.append(("assistant", answer, reasoning_text))
+    return answer, reasoning_text
+
+
 def _activate_agent_core(session_name: str) -> tuple[bool, str]:
     _clear_agent_cache()
     try:
@@ -777,6 +1067,7 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
             (
                 "assistant",
                 "請先按「啟用 Agent」。啟用後，我會讀取左欄傳來的頁面狀態，再回答你的問題。",
+                "",
             )
         ]
 
@@ -833,11 +1124,13 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
             st.rerun()
 
     settings_error = _prepare_tts_preferences(page_name)
+    reasoning_error = _prepare_reasoning_preferences(page_name)
 
     current_session = st.session_state.get("session_name")
     if not current_session:
         st.caption("尚無對話紀錄，請按 **+** 新增對話。")
         _render_tts_settings_ui(settings_error=settings_error)
+        _render_reasoning_settings_ui(settings_error=reasoning_error)
         st.chat_input("詢問...", disabled=True, key="studio_chat_no_session")
         return
 
@@ -856,17 +1149,19 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
             else:
                 st.error(message)
         _render_tts_settings_ui(settings_error=settings_error)
+        _render_reasoning_settings_ui(settings_error=reasoning_error)
         st.chat_input("請先啟用 Agent...", disabled=True, key="studio_chat_not_activated")
         return
 
     with st.expander("技術資訊", expanded=False):
         st.caption(f"對話紀錄檔：{SESSION_DIR / current_session}")
         st.caption(f"語音設定檔：{TTS_CONFIG_PATH}")
-        st.caption(f"LLM 設定檔：{PEAS_AGENT_HOME / 'config.json'}")
+        st.caption(f"LLM 設定檔：{LLM_CONFIG_PATH}")
         if page_name:
             st.caption(f"目前頁面：{page_name}")
 
     _render_tts_settings_ui(settings_error=settings_error)
+    _render_reasoning_settings_ui(settings_error=reasoning_error)
 
     try:
         agent = _get_agent_for_session(current_session)
@@ -885,9 +1180,9 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
 
     chat = st.container(height=460, border=False)
     with chat:
-        for role, text in st.session_state["studio_chat_history"]:
-            with st.chat_message(role):
-                st.markdown(text)
+        for entry in st.session_state["studio_chat_history"]:
+            role, text, reasoning = _parse_history_entry(entry)
+            _render_history_message(role, text, reasoning=reasoning)
 
     st.caption("輸入文字後 Enter 送出；可 Ctrl+V 貼圖，或點輸入框內圖片按鈕選檔（PNG/JPG/WEBP，上限 5 MB）。")
     chatinput = multimodal_chatinput(
@@ -932,7 +1227,7 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
             attachment_note = user_text or "（已附圖，未輸入文字）"
             display_user_text = f"{attachment_note}\n\n（已附圖：{image_path}）"
 
-        st.session_state["studio_chat_history"].append(("user", display_user_text))
+        st.session_state["studio_chat_history"].append(("user", display_user_text, ""))
 
         prompt_user_text = user_text or "（使用者只附上圖片，未輸入文字）"
         if extra_context.strip():
@@ -949,17 +1244,82 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
                 if pending_image is not None and image_path:
                     st.image(pending_image["bytes"], caption="已附圖", use_container_width=True)
             with st.chat_message("assistant"):
+                reasoning_slot = st.empty()
                 placeholder = st.empty()
                 answer_parts: list[str] = []
+                reasoning_segments: list[str] = []
+                reasoning_parts: list[str] = []
+                stream_ui: dict[str, Any] = {
+                    "reasoning_ph": None,
+                    "visible": False,
+                    "expanded": False,
+                    "answer_started": False,
+                }
                 tts_settings = _build_tts_settings_for_playback()
                 if st.session_state.get("studio_tts_enabled") and tts_settings is None:
                     cfg = _load_tts_config()
                     if not str(cfg.get("api_key", "")).strip():
                         st.warning("語音已開啟，但 ~/.peas-agent/tts.json 尚未設定 api_key。")
+                    elif "@" not in str(cfg.get("model", "")).strip():
+                        st.warning(
+                            "語音已開啟，但 tts.json 的 model 必須使用 router 格式，"
+                            f"例如 `{DEFAULT_TTS_MODEL}`。"
+                        )
+
+                def _sync_reasoning_ui() -> None:
+                    text = _merged_reasoning_text(reasoning_segments, reasoning_parts)
+                    if not text:
+                        return
+                    expanded = not stream_ui["answer_started"]
+                    if expanded:
+                        if not stream_ui["visible"] or not stream_ui["expanded"]:
+                            _render_reasoning_expander(
+                                reasoning_slot,
+                                text,
+                                expanded=True,
+                                stream_ui=stream_ui,
+                            )
+                        elif stream_ui["reasoning_ph"] is not None:
+                            stream_ui["reasoning_ph"].markdown(text)
+                        else:
+                            _render_reasoning_expander(
+                                reasoning_slot,
+                                text,
+                                expanded=True,
+                                stream_ui=stream_ui,
+                            )
+                    else:
+                        _render_reasoning_expander(
+                            reasoning_slot,
+                            text,
+                            expanded=False,
+                            stream_ui=stream_ui,
+                        )
+
+                def on_reasoning(token: str) -> None:
+                    reasoning_parts.append(token)
+                    _sync_reasoning_ui()
 
                 def on_token(token: str) -> None:
+                    if not stream_ui["answer_started"]:
+                        stream_ui["answer_started"] = True
+                        _sync_reasoning_ui()
                     answer_parts.append(token)
                     placeholder.markdown("".join(answer_parts))
+
+                def on_stream_reset() -> None:
+                    _commit_reasoning_round(reasoning_segments, reasoning_parts)
+                    answer_parts.clear()
+                    stream_ui["answer_started"] = False
+                    placeholder.markdown(TOOL_RUN_PLACEHOLDER)
+                    merged = _merged_reasoning_text(reasoning_segments, reasoning_parts)
+                    if merged:
+                        _render_reasoning_expander(
+                            reasoning_slot,
+                            merged,
+                            expanded=True,
+                            stream_ui=stream_ui,
+                        )
 
                 try:
                     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
@@ -969,6 +1329,8 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
                             prompt,
                             image_path=image_path,
                             on_token=on_token,
+                            on_reasoning=on_reasoning,
+                            on_stream_reset=on_stream_reset,
                         )
                 except Exception as exc:
                     final_text = f"Agent 執行時發生錯誤：`{exc}`"
@@ -977,7 +1339,11 @@ def render_chat_panel(*, extra_context: str = "", page_name: str = "") -> None:
                 else:
                     answer = "".join(answer_parts).strip() or final_text.strip()
 
-                st.session_state["studio_chat_history"].append(("assistant", answer))
+                _commit_reasoning_round(reasoning_segments, reasoning_parts)
+                reasoning_text = _merged_reasoning_text(reasoning_segments, [])
+                st.session_state["studio_chat_history"].append(
+                    ("assistant", answer, reasoning_text)
+                )
                 if tts_settings is not None and answer:
                     try:
                         stream_tts_play(answer, tts_settings)

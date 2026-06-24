@@ -1,0 +1,29 @@
+{
+  "sources": {
+    "llm-wiki-karpathy": {
+      "filename": "llm-wiki-karpathy.md",
+      "first_ingested": "2026-06-24",
+      "last_ingested": "2026-06-24",
+      "versions": [
+        {
+          "date": "2026-06-24",
+          "pages_created": 1,
+          "pages_modified": 0,
+          "status": "success"
+        },
+        {
+          "date": "2026-06-24",
+          "pages_created": 0,
+          "pages_modified": 1,
+          "status": "success"
+        }
+      ]
+    }
+  },
+  "stats": {
+    "total_pages": 1,
+    "total_sources": 1,
+    "last_ingest_date": "2026-06-24",
+    "last_lint_date": "2026-06-24"
+  }
+}

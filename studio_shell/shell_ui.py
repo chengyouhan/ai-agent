@@ -59,11 +59,13 @@ _MULTIMODAL_CHATINPUT_THEME_FIX = """
 """
 
 
+_THEME_FIX_IFRAME_HEIGHT = 1
+
+
 def inject_multimodal_chatinput_theme_fix() -> None:
     """st-multimodal-chatinput hardcodes white textarea text; fix for light themes."""
-    import streamlit.components.v1 as components
-
-    components.html(_MULTIMODAL_CHATINPUT_THEME_FIX, height=0, scrolling=False)
+    # st.iframe rejects height=0; use 1px (legacy components.html allowed 0).
+    st.iframe(_MULTIMODAL_CHATINPUT_THEME_FIX, height=_THEME_FIX_IFRAME_HEIGHT)
 
 
 def inject_style() -> None:
